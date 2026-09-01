@@ -1,0 +1,20 @@
+{
+  "name": "rasta-kart",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5180 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --port 5180 --strictPort",
+    "shot": "node tests/shot.mjs"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0",
+    "playwright": "^1.56.0",
+    "pako": "^2.1.0"
+  }
+}
