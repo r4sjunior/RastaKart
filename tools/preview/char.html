@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>char preview</title>
+<style>html,body{margin:0;background:#8fb8d8;overflow:hidden}canvas{display:block}</style>
+<canvas id="gl"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { CharacterSystem } from '/src/characters/CharacterSystem.js';
+
+const W = 700, H = 700;
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(W, H, false);
+renderer.setPixelRatio(1);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fc6e6);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const sun = new THREE.DirectionalLight(0xfff4e0, 2.6);
+sun.position.set(4, 7, 5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -4; sun.shadow.camera.right = 4;
+sun.shadow.camera.top = 4; sun.shadow.camera.bottom = -4;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xbcd8ff, 0x6b6552, 1.1));
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40),
+  new THREE.MeshStandardMaterial({ color: 0x9a9a96, roughness: 0.95 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// grid so scale is legible
+const grid = new THREE.GridHelper(20, 40, 0x555555, 0x777777);
+grid.position.y = 0.002;
+grid.material.opacity = 0.35; grid.material.transparent = true;
+scene.add(grid);
+
+const camera = new THREE.PerspectiveCamera(38, W / H, 0.05, 200);
+
+// ---- fake ctx -------------------------------------------------------------
+let seed = 1337;
+const rng = { range: (a, b) => { seed = (seed * 1664525 + 1013904223) >>> 0; return a + (seed / 4294967296) * (b - a); }, next: () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; } };
+const listeners = new Map();
+const ctx = {
+  scene, camera, renderer, rng, quality: 'high',
+  time: { t: 0, dt: 1 / 60, frame: 0 },
+  events: { on: (n, f) => { (listeners.get(n) ?? listeners.set(n, []).get(n)).push(f); }, emit: (n, a) => (listeners.get(n) ?? []).forEach((f) => f(a)) },
+  karts: [],
+};
+
+function makeKart(i) {
+  return {
+    id: i, name: `k${i}`, isPlayer: i === 0, liveryIndex: i,
+    position: new THREE.Vector3(0, 0, 0), quaternion: new THREE.Quaternion(),
+    velocity: new THREE.Vector3(0, 0, 0), speed: 0, forwardSpeed: 0,
+    steerInput: 0, steerAngle: 0,
+    drift: { active: false, dir: 0, charge: 0, tier: 0 },
+    boost: { timer: 0, power: 0 }, air: { off: false, time: 0 },
+    onGround: true, surface: 'road', groundNormal: new THREE.Vector3(0, 1, 0),
+    wheelContacts: [0, 1, 2, 3].map(() => ({ pos: new THREE.Vector3(), compression: 0.3, grounded: true, surface: 'road' })),
+    stats: { topSpeed: 26 }, visual: null,
+  };
+}
+
+const sys = new CharacterSystem();
+const kart = makeKart(0);
+ctx.karts.push(kart);
+await sys.init(ctx);
+if (!kart.visual) sys.attach(kart, ctx);
+
+let t = 0;
+function step(dt) {
+  t += dt; ctx.time.t = t; ctx.time.dt = dt;
+  sys.lateUpdate?.(dt, ctx);
+}
+for (let i = 0; i < 90; i++) step(1 / 60);
+
+const VIEWS = {
+  hero:  { p: [2.6, 1.35, 2.9], look: [0, 0.62, 0] },
+  side:  { p: [4.2, 0.85, 0.0], look: [0, 0.62, 0] },
+  front: { p: [0.0, 1.1, 4.0], look: [0, 0.62, 0] },
+  back:  { p: [0.0, 1.25, -4.0], look: [0, 0.62, 0] },
+  top:   { p: [0.01, 4.2, 0.6], look: [0, 0.4, 0] },
+  close: { p: [1.5, 1.05, 1.9], look: [0.0, 0.78, -0.1] },
+  // driver-focused crops
+  dside: { p: [2.0, 0.80, -0.15], look: [0, 0.80, -0.15] },
+  dfront:{ p: [0.0, 0.85, 2.0],  look: [0, 0.82, -0.10] },
+  dhero: { p: [1.35, 1.15, 1.45], look: [0, 0.80, -0.10] },
+  dback: { p: [0.0, 1.00, -2.0], look: [0, 0.80, -0.15] },
+};
+
+function view(name) {
+  const v = VIEWS[name] ?? VIEWS.hero;
+  camera.position.set(...v.p);
+  camera.lookAt(new THREE.Vector3(...v.look));
+  camera.updateProjectionMatrix();
+}
+
+function render() { renderer.render(scene, camera); }
+view('hero'); render();
+
+window.__PV = {
+  ready: true, ctx, sys, kart, view, render, step,
+  set(props) { Object.assign(kart, props); },
+  hideKart(v = true) {
+    kart.visual.traverse((o) => {
+      if (o === kart.visual) return;
+      if (o.name && o.name.startsWith('kart:')) o.visible = !v;
+    });
+  },
+  showKart() { this.hideKart(false); },
+  drive(steer, speed) {
+    kart.steerAngle = steer; kart.speed = speed; kart.forwardSpeed = speed;
+    kart.velocity.set(0, 0, speed);
+    for (let i = 0; i < 40; i++) step(1 / 60);
+  },
+  bbox(objName) {
+    const b = new THREE.Box3();
+    let target = null;
+    kart.visual.traverse((o) => { if (o.name === objName) target = o; });
+    b.setFromObject(target ?? kart.visual);
+    return { min: b.min.toArray(), max: b.max.toArray() };
+  },
+  worldPos(name) {
+    let o = null; kart.visual.traverse((x) => { if (x.name === name) o = x; });
+    if (!o) return null;
+    return o.getWorldPosition(new THREE.Vector3()).toArray();
+  },
+};
+</script>
