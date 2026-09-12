@@ -30,8 +30,16 @@ import { KartModel, LIVERIES } from './KartModel.js';
 
 // Files under public/ are served from the base URL, not bundled.
 const BASE = import.meta.env?.BASE_URL ?? '/';
-const GLB_URL = `${BASE}assets/characters/rasta.glb`;
-const RIG_URL = `${BASE}assets/characters/rasta.rig.json`;
+const CHAR_URL = (slug) => `${BASE}assets/characters/${slug}.glb`;
+const RIG_URL = (slug) => `${BASE}assets/characters/${slug}.rig.json`;
+
+/**
+ * One GLB per driver (built by tools/build-character.mjs for 'rasta', and
+ * tools/build-roster.mjs for the rest — same rig, same voxel technique, each
+ * with its own recoloured skin/hair/outfit). Keyed by the lowercase name
+ * PhysicsSystem's CHARACTERS array assigns each kart.
+ */
+const ROSTER_SLUGS = ['rasta', 'zion', 'marley', 'selah', 'kofi', 'nia', 'tafari', 'ayo'];
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const damp = (c, w, l, dt) => c + (w - c) * (1 - Math.exp(-l * dt));
@@ -183,34 +191,32 @@ export class CharacterSystem {
 
   async init(ctx) {
     this.ctx = ctx;
-    ctx.onProgress?.(0.72, 'trazendo o piloto');
+    ctx.onProgress?.(0.72, 'trazendo os pilotos');
 
     const loader = new GLTFLoader();
-    const [gltf, rig] = await Promise.all([
-      loader.loadAsync(GLB_URL).catch((e) => { console.warn('[characters] GLB indisponível', e); return null; }),
-      fetch(RIG_URL).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ]);
+    this.templates = new Map();
+    await Promise.all(ROSTER_SLUGS.map(async (slug) => {
+      const [gltf, rig] = await Promise.all([
+        loader.loadAsync(CHAR_URL(slug)).catch((e) => { console.warn(`[characters] GLB indisponível: ${slug}`, e); return null; }),
+        fetch(RIG_URL(slug)).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
+      if (!gltf) return;
 
-    this.rigData = rig;
-    this.template = gltf ? gltf.scene : null;
-    this.posesQ = {};
-    for (const [name, p] of Object.entries(rig?.poses ?? {})) {
-      if (p?.euler) this.posesQ[name] = poseToQuats(p.euler, true);
-    }
-    // the manifest stores radians, poseToQuats assumes degrees — redo in rad
-    for (const [name, p] of Object.entries(rig?.poses ?? {})) {
-      if (!p?.euler) continue;
-      const out = {};
-      const e = new THREE.Euler();
-      for (const [b, xyz] of Object.entries(p.euler)) {
-        e.set(xyz[0] ?? 0, xyz[1] ?? 0, xyz[2] ?? 0, 'XYZ');
-        out[b] = new THREE.Quaternion().setFromEuler(e);
+      // The manifest stores radians; poseToQuats expects degrees, so build
+      // the quaternions directly here instead of double-converting.
+      const posesQ = {};
+      for (const [name, p] of Object.entries(rig?.poses ?? {})) {
+        if (!p?.euler) continue;
+        const out = {};
+        const e = new THREE.Euler();
+        for (const [b, xyz] of Object.entries(p.euler)) {
+          e.set(xyz[0] ?? 0, xyz[1] ?? 0, xyz[2] ?? 0, 'XYZ');
+          out[b] = new THREE.Quaternion().setFromEuler(e);
+        }
+        posesQ[name] = out;
       }
-      this.posesQ[name] = out;
-    }
 
-    if (this.template) {
-      this.template.traverse((o) => {
+      gltf.scene.traverse((o) => {
         if (!o.isMesh && !o.isSkinnedMesh) return;
         o.castShadow = true;
         o.receiveShadow = true;
@@ -227,7 +233,9 @@ export class CharacterSystem {
           m.needsUpdate = true;
         }
       });
-    }
+
+      this.templates.set(slug, { scene: gltf.scene, posesQ });
+    }));
 
     ctx.events.on('kart:spawn', (k) => this.attach(k, ctx));
     for (const k of ctx.karts) if (!k.visual) this.attach(k, ctx);
@@ -260,11 +268,18 @@ export class CharacterSystem {
     const kartModel = new KartModel(liveryIndex, ctx.quality);
     group.add(kartModel.root);
 
+    // The player is always the Rasta driver — the hero avatar, regardless of
+    // which stat card was picked in the menu — every CPU wears the avatar
+    // matching its own name (see tools/build-roster.mjs for how those were
+    // built). Falls back to Rasta if a name has no matching GLB.
+    const slug = kart.isPlayer ? 'rasta' : (kart.name ?? 'rasta').toLowerCase();
+    const tpl = this.templates.get(slug) ?? this.templates.get('rasta');
+
     let driver = null;
     let bones = null;
     const scale = 1.0;
-    if (this.template) {
-      driver = skeletonClone(this.template);
+    if (tpl) {
+      driver = skeletonClone(tpl.scene);
       driver.scale.setScalar(scale);
       // The rig's hip pivot is 0.6 m up in its own space; drop the character so
       // that pivot lands exactly on the seat pan.
@@ -288,6 +303,7 @@ export class CharacterSystem {
       kartModel,
       driver,
       bones,
+      posesQ: tpl?.posesQ ?? {},
       scale,
       lean: 0,
       pitch: 0,
@@ -310,7 +326,7 @@ export class CharacterSystem {
   /** Blend one of the .vxa reaction poses in over the driving pose. */
   #react(kart, pose, dur, peak = 1.0) {
     const r = this.#byId.get(kart?.id);
-    if (!r || !this.posesQ?.[pose]) return;
+    if (!r || !r.posesQ?.[pose]) return;
     r.react = { pose, t: 0, dur, peak, w: 0 };
   }
 
@@ -320,7 +336,7 @@ export class CharacterSystem {
    */
   #writePose(r, reactW) {
     const b = r.bones;
-    const over = reactW > 0.001 && r.react ? this.posesQ[r.react.pose] : null;
+    const over = reactW > 0.001 && r.react ? r.posesQ[r.react.pose] : null;
     for (const [name, q] of Object.entries(DRIVE_Q)) {
       const bone = b[name];
       if (!bone) continue;

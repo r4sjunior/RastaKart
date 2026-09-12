@@ -177,23 +177,30 @@ export class RaceSystem {
     k.offTrackTime = offSurface ? k.offTrackTime + dt : 0;
     const lost = k.offTrackTime > 4 || Math.abs(k.lateral ?? 0) > 34;
 
-    // A CPU wedged against another kart or a wall stays on the tarmac — the
-    // surface/lateral checks above never see it — and can sit there for good
-    // once its own recovery steering cannot out-muscle whatever is blocking
-    // it. Track real forward progress instead and free it after a few
-    // seconds of going nowhere. CPU-only, deliberately: a human backing out
-    // of a wall is not a bug to "fix" by teleporting them.
+    // A CPU wedged against another kart or a wall (or stuck against the
+    // scenery off the edge of the track) stays on the tarmac or flickers
+    // between surfaces — the checks above can miss it — and can sit there for
+    // good once its own recovery steering cannot out-muscle whatever is
+    // blocking it. Track real forward progress instead and free it after a
+    // few seconds of going nowhere.
+    //
+    // Deliberately NOT gated on instantaneous speed: a kart bouncing off a
+    // wall or another kart shows real speed every step from the collision
+    // response alone, with zero net distance gained. Resetting the timer on
+    // that speed spike (an earlier version of this check did) is exactly what
+    // let a bouncing kart dodge the safety net indefinitely. Progress is the
+    // only thing that resets it. CPU-only: a human backing out of a wall is
+    // not a bug to "fix" by teleporting them.
     let wedged = false;
     if (!k.isPlayer) {
       const dist = k.raceDistance ?? 0;
-      if (k._progressDist === undefined || dist > k._progressDist + 0.6) {
-        k._progressDist = dist; k._stuckTime = 0;
-      } else if ((k.speed ?? 0) < 2.5) {
-        k._stuckTime = (k._stuckTime ?? 0) + dt;
-      } else {
+      if (k._progressDist === undefined || dist > k._progressDist + 0.5) {
+        k._progressDist = dist;
         k._stuckTime = 0;
+      } else {
+        k._stuckTime = (k._stuckTime ?? 0) + dt;
       }
-      wedged = k._stuckTime > 3.2;
+      wedged = k._stuckTime > 3.0;
     }
 
     if (fellThrough || drowned || strayed || lost || wedged) this.#beginRespawn(k);
