@@ -41,7 +41,9 @@ const TUNE = {
   rollLambda: 7.0,
 
   groundClear: 1.05,      // never let the camera sink into the track
-  shakeDecay: 5.5,
+  shakeDecay: 7.5,
+  shakeAmp: 0.028,        // rad of rotation per unit^2 of shake intensity
+  shakeMax: 1.15,
 };
 
 export class CameraSystem {
@@ -77,10 +79,15 @@ export class CameraSystem {
     ctx.camera.far = 4000;
     ctx.camera.updateProjectionMatrix();
 
-    ctx.events.on('kart:hit', (e) => { if (this.#isPlayer(e)) this.kick(0.85); });
-    ctx.events.on('kart:wall', (e) => { if (this.#isPlayer(e)) this.kick(0.35); });
+    ctx.events.on('kart:hit', (e) => { if (this.#isPlayer(e)) this.kick(0.55); });
+    ctx.events.on('kart:wall', (e) => {
+      if (this.#isPlayer(e)) this.kick((e?.graze ? 0.10 : 0.30) * clamp(e?.strength ?? 1, 0.3, 1));
+    });
     ctx.events.on('kart:land', (e) => {
-      if (this.#isPlayer(e)) this.kick(clamp((e?.impact ?? 1) * 0.4, 0.12, 0.7));
+      // A drift hop barely lifts the kart (~3 m/s) and lands well under
+      // `landHardImpact`; only a real fall should kick the camera, or every
+      // mini-turbo hop during normal driving reads as constant screen shake.
+      if (this.#isPlayer(e) && e?.hard) this.kick(clamp((e?.impact ?? 1) * 0.05, 0, 0.5));
     });
     ctx.events.on('race:start', () => { this.#intro = null; });
     ctx.events.on('race:countdown', (e) => { if (e?.n === 0) this.#intro = null; });
@@ -100,7 +107,7 @@ export class CameraSystem {
 
   #isPlayer(e) { return e?.kart ? !!e.kart.isPlayer : false; }
 
-  kick(intensity = 0.5) { this.#shake = Math.min(1.6, this.#shake + intensity); }
+  kick(intensity = 0.5) { this.#shake = Math.min(this.tune.shakeMax, this.#shake + intensity); }
 
   #kartYaw(k) { return this.#e.setFromQuaternion(k.quaternion, 'YXZ').y; }
 
@@ -166,11 +173,16 @@ export class CameraSystem {
 
     if (this.#shake > 0.001) {
       this.#shakeSeed += dt * 47;
-      const s = this.#shake * this.#shake * 0.05;
+      const s = this.#shake * this.#shake * T.shakeAmp;
       cam.rotateX(Math.sin(this.#shakeSeed * 2.7) * s);
       cam.rotateY(Math.sin(this.#shakeSeed * 3.9 + 1.3) * s);
       cam.rotateZ(Math.sin(this.#shakeSeed * 5.1 + 2.1) * s * 0.6);
-      this.#shake = Math.max(0, this.#shake - T.shakeDecay * dt * this.#shake);
+      // Plain exponential decay, independent of how it was triggered — a decay
+      // rate that scaled with the *current* shake value let repeated small
+      // kicks (e.g. a sustained wall graze) stall near the ceiling instead of
+      // settling, which is what read as a constant tremor.
+      this.#shake *= Math.exp(-T.shakeDecay * dt);
+      if (this.#shake < 0.002) this.#shake = 0;
     }
 
     const wantFov = T.fovBase + speedN * T.fovSpeed + (boosting ? T.fovBoost : 0);

@@ -130,6 +130,7 @@ export class KartBody {
     this.wasGrounded = true;
     this.prevSurface = 'road';
     this.rumble = 0;
+    this.wallEventCooldown = 0;
 
     this.controls = { throttle: 0, brake: 0, steer: 0, drift: false, driftPressed: false, item: false };
   }
@@ -274,6 +275,7 @@ export class KartBody {
     }
     if (this.hopTimer > 0) this.hopTimer -= dt;
     if (this.padCooldown > 0) this.padCooldown -= dt;
+    if (this.wallEventCooldown > 0) this.wallEventCooldown -= dt;
   }
 
   /** Frozen karts (countdown, respawn) hold their pose but keep sitting on the
@@ -896,11 +898,17 @@ export class KartBody {
           k.velocity.copy(this._v2).addScaledVector(n, -vn * C.wallRestitution);
           if (k.drift.active) this.releaseDrift(ctx, false);
         }
-        if (Math.abs(vn) > C.wallEventSpeed) {
+        // A kart held into a barrier re-collides every physics step (120/s):
+        // without a cooldown that fires 'kart:wall' fast enough to saturate the
+        // camera shake into a sustained buzz for as long as contact holds. A hard
+        // impact is still reported immediately; a graze is throttled to a rate a
+        // human eye reads as feedback instead of a vibration.
+        if (Math.abs(vn) > C.wallEventSpeed && this.wallEventCooldown <= 0) {
           ctx.events.emit('kart:wall', {
             kart: k, normal: n.clone(), speed: Math.abs(vn), graze,
             strength: clamp01(Math.abs(vn) / 14),
           });
+          this.wallEventCooldown = graze ? 0.14 : 0.05;
         }
       }
     }
