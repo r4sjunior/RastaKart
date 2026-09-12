@@ -129,6 +129,29 @@ const CHARACTERS = [
 
 const eq = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
+/**
+ * Head_B.vxm was authored facing the opposite way from every other part in
+ * ME002 (confirmed by rendering it: on every Head_B driver the face pointed
+ * straight back out of the kart at the chase camera instead of forward down
+ * the track). Mirroring X *and* Z is a 180 deg turn about the vertical axis
+ * — the same "reverse the row" trick parseVXM's own X-mirror uses — so the
+ * geometry ends up facing the same way Head_A's does, with the pivot/origin
+ * math elsewhere untouched (reflecting about the grid's own centre keeps the
+ * bounding box, and so the pivot reference, exactly where it was).
+ */
+function mirrorXZ(vox, size) {
+  const { x: sx, y: sy, z: sz } = size;
+  const out = new Uint8Array(vox.length);
+  for (let x = 0; x < sx; x++) {
+    for (let y = 0; y < sy; y++) {
+      for (let z = 0; z < sz; z++) {
+        out[((sx - 1 - x) * sy + y) * sz + (sz - 1 - z)] = vox[(x * sy + y) * sz + z];
+      }
+    }
+  }
+  return out;
+}
+
 function recolour(palette, pairs) {
   return palette.map((c) => {
     for (const [from, to] of pairs) if (eq([c.r, c.g, c.b], from)) return { ...c, r: to[0], g: to[1], b: to[2] };
@@ -208,7 +231,7 @@ function buildOne(def) {
     vxm.palette = recolour(vxm.palette, pairsFor(b.name, def));
 
     const { x: sx, y: sy, z: sz } = vxm.size;
-    const vox = vxm.models[0].voxels;
+    const vox = filename === 'Head_B.vxm' ? mirrorXZ(vxm.models[0].voxels, vxm.size) : vxm.models[0].voxels;
     const origin = [
       b.world[0] - vxm.pivot.x * sx * VOXEL,
       b.world[1] - vxm.pivot.y * sy * VOXEL,

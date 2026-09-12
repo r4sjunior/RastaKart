@@ -67,6 +67,26 @@ export class Game {
     }
     this.resize();
     window.addEventListener('resize', this._onResize = () => this.resize());
+
+    // Every material's shader program is compiled lazily, on the first frame
+    // it is actually drawn — WebGL/driver work that block the main thread.
+    // With a full track (terrain, water, road, barriers...) plus eight
+    // distinctly-shaded driver models now in the scene from frame 1, that
+    // first frame was a multi-second freeze right as the race appeared.
+    // Doing the compile here, still behind the loading screen, moves the
+    // stall off the player's first frame instead of removing it.
+    this.ctx.onProgress?.(0.99, 'compilando shaders');
+    const { renderer, scene, camera } = this.ctx;
+    try {
+      if (renderer?.compileAsync) await renderer.compileAsync(scene, camera);
+      else renderer?.compile?.(scene, camera);
+    } catch { /* best effort — a slow first frame beats a boot that never finishes */ }
+    // compileAsync only walks the scene graph's own materials; the
+    // post-process pass shaders (composer) and anything compileAsync missed
+    // (this renderer/driver combination measurably did) only truly compile on
+    // an actual draw, so force two of those here too.
+    try { this.renderOnce(); this.renderOnce(); } catch { /* same tradeoff */ }
+
     return this;
   }
 
