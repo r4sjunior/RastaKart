@@ -173,11 +173,30 @@ export class RaceSystem {
     // back on its own. Rather than let it drive to the horizon, give it a few
     // seconds of grace — enough for a legitimate shortcut or a wide line — and
     // then put it back on the track.
-    const offSurface = k.onGround && (k.surface === 'grass' || k.surface === 'sand');
+    const offSurface = k.onGround && (k.surface === 'grass' || k.surface === 'sand' || k.surface === 'dirt');
     k.offTrackTime = offSurface ? k.offTrackTime + dt : 0;
     const lost = k.offTrackTime > 4 || Math.abs(k.lateral ?? 0) > 34;
 
-    if (fellThrough || drowned || strayed || lost) this.#beginRespawn(k);
+    // A CPU wedged against another kart or a wall stays on the tarmac — the
+    // surface/lateral checks above never see it — and can sit there for good
+    // once its own recovery steering cannot out-muscle whatever is blocking
+    // it. Track real forward progress instead and free it after a few
+    // seconds of going nowhere. CPU-only, deliberately: a human backing out
+    // of a wall is not a bug to "fix" by teleporting them.
+    let wedged = false;
+    if (!k.isPlayer) {
+      const dist = k.raceDistance ?? 0;
+      if (k._progressDist === undefined || dist > k._progressDist + 0.6) {
+        k._progressDist = dist; k._stuckTime = 0;
+      } else if ((k.speed ?? 0) < 2.5) {
+        k._stuckTime = (k._stuckTime ?? 0) + dt;
+      } else {
+        k._stuckTime = 0;
+      }
+      wedged = k._stuckTime > 3.2;
+    }
+
+    if (fellThrough || drowned || strayed || lost || wedged) this.#beginRespawn(k);
   }
 
   #beginRespawn(k) {
@@ -206,6 +225,8 @@ export class RaceSystem {
     k.drift.active = false; k.drift.charge = 0; k.drift.tier = 0;
     k.respawn.active = false;
     k.frozen = false;
+    k._stuckTime = 0;
+    k._progressDist = k.raceDistance;
     ctx.events.emit('kart:respawn-end', { kart: k });
   }
 

@@ -83,6 +83,18 @@ const MASSIFS = [
 export class WorldSystem {
   name = 'world'; order = 10;
 
+  /**
+   * `init` below is a dozen synchronous, individually expensive build steps
+   * (the height field alone samples tens of thousands of noise points). With
+   * no `await` between them the whole thing runs as one uninterruptible task,
+   * which is what makes the loading screen read as frozen rather than
+   * progressing — the progress bar text/width changes are all queued but
+   * never get a chance to paint. Yielding one animation frame between steps
+   * costs at most a few frames' worth of wall time in total and turns that
+   * one freeze into a bar that visibly advances.
+   */
+  #yield() { return new Promise((r) => requestAnimationFrame(r)); }
+
   async init(ctx) {
     this.ctx = ctx;
     const q = ctx.quality ?? 'high';
@@ -92,6 +104,7 @@ export class WorldSystem {
     const aniso = Math.min(16, ctx.renderer?.capabilities?.getMaxAnisotropy?.() ?? 8);
 
     ctx.onProgress?.(0.12, 'traçando o circuito');
+    await this.#yield();
 
     // ---- the ribbon ------------------------------------------------------
     this.ribbon = new Ribbon({
@@ -123,6 +136,7 @@ export class WorldSystem {
     }
 
     ctx.onProgress?.(0.2, 'pintando o asfalto');
+    await this.#yield();
     const texSize = q === 'low' ? 256 : q === 'medium' ? 384 : 512;
     this.tex = {
       asphalt: TEX.asphaltSet(rng, aniso, texSize),
@@ -146,28 +160,36 @@ export class WorldSystem {
     };
 
     ctx.onProgress?.(0.26, 'medindo o litoral');
+    await this.#yield();
     this.#bakeHeightField();
     this.#bakeShortcut();
 
     this.#buildRoad();
     ctx.onProgress?.(0.34, 'levantando o terreno');
+    await this.#yield();
     this.#buildTerrain();
     ctx.onProgress?.(0.44, 'enchendo o mar');
+    await this.#yield();
     this.#buildWater();
     ctx.onProgress?.(0.50, 'montando as barreiras');
+    await this.#yield();
     this.#buildBarriers();
     this.#buildBoostPanels();
     this.#buildRoadDecals();
     this.#buildStartLine();
     ctx.onProgress?.(0.56, 'erguendo as arquibancadas');
+    await this.#yield();
     this.#buildArches();
     this.#buildStands(rng);
     ctx.onProgress?.(0.60, 'construindo a vila');
+    await this.#yield();
     this.#buildVillage(rng);
     ctx.onProgress?.(0.64, 'abrindo o desfiladeiro');
+    await this.#yield();
     this.#buildGorge(rng);
     this.#buildShortcutMesh();
     ctx.onProgress?.(0.67, 'plantando o cenário');
+    await this.#yield();
     this.#buildScenery(rng);
 
     // ---- derived race data ----------------------------------------------

@@ -57,6 +57,13 @@ export class Game {
   async init() {
     for (const s of this.systems) {
       if (s.init) await s.init(this.ctx);
+      // Each system's init is one long synchronous build (geometry, the AI's
+      // racing line, the audio bank...); an `await` on a promise that never
+      // yields to the browser between them turns the whole boot into a single
+      // unresponsive task, which is what reads as the page hanging on the
+      // loading screen. A frame yield between systems lets the progress bar
+      // actually repaint and keeps the tab from looking frozen.
+      await new Promise((r) => requestAnimationFrame(r));
     }
     this.resize();
     window.addEventListener('resize', this._onResize = () => this.resize());

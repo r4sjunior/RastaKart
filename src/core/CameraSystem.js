@@ -89,6 +89,7 @@ export class CameraSystem {
       // mini-turbo hop during normal driving reads as constant screen shake.
       if (this.#isPlayer(e) && e?.hard) this.kick(clamp((e?.impact ?? 1) * 0.05, 0, 0.5));
     });
+    ctx.events.on('item:pickup', (e) => { if (this.#isPlayer(e)) this.kick(0.12); });
     ctx.events.on('race:start', () => { this.#intro = null; });
     ctx.events.on('race:countdown', (e) => { if (e?.n === 0) this.#intro = null; });
 

@@ -25,7 +25,9 @@ import { buildProfile, rubberFactor, RUBBER } from './profiles.js';
  *    - occasional "mistakes" — a wide, slightly slower moment — so a driver
  *      does not feel robotically perfect lap after lap;
  *    - light rubber-banding on corner speed only (see `profiles.js`), so a
- *      lapped kart is not also a parked one.
+ *      lapped kart is not also a parked one;
+ *    - a recovery override that takes priority over all of the above the
+ *      moment a kart is off the tarmac, so nobody sits parked in the grass.
  *
  *  Item usage stays in ItemSystem (`_aiItemDelay`) — this system only ever
  *  writes `kart.aiControls`.
@@ -63,6 +65,7 @@ export class AISystem {
       zoneAttempt: false,
       zoneEntryDist: 0,
       trickRolled: false,
+      recovering: false,
     };
   }
 
@@ -82,6 +85,41 @@ export class AISystem {
     const w = ctx.world;
     const p = w.project(k.position);
     const i = line.indexAt(p.u);
+
+    // ---- recovery: off the tarmac (pushed wide, spun into the grass, a bad
+    // item hit) takes priority over everything else below. Wander, traffic,
+    // drift zones and the racing line itself all assume the kart is already
+    // on the road, so instead of letting them fight a bad position, aim
+    // straight back at the centreline until we are solidly back on it —
+    // hysteresis (half the corridor, not the edge of it) so it does not
+    // flick in and out of recovery right at the tarmac's edge.
+    const offRoad = k.onGround && k.surface !== 'road' && k.surface !== 'boost';
+    if (offRoad) d.recovering = true;
+    else if (d.recovering && Math.abs(p.lateral) < line.half[i] * 0.55) d.recovering = false;
+
+    if (d.recovering) {
+      const leadM = 10 + Math.min(k.speed, 18) * 0.5;
+      const rs = w.sampleSpline((p.u + leadM / w.trackLength) % 1);
+      this.#tgt.copy(rs.pos).addScaledVector(rs.right, -p.lateral * 0.15);
+      this.#to.copy(this.#tgt).sub(k.position).setY(0);
+      let steerTarget = 0;
+      if (this.#to.lengthSq() > 1e-6) {
+        this.#to.normalize();
+        this.#fwd.set(0, 0, 1).applyQuaternion(k.quaternion).setY(0).normalize();
+        const err = Math.atan2(
+          this.#fwd.x * this.#to.z - this.#fwd.z * this.#to.x,
+          this.#fwd.dot(this.#to),
+        );
+        steerTarget = clamp(err * 2.6, -1, 1);
+      }
+      d.steer += (steerTarget - d.steer) * (1 - Math.exp(-16 * dt));
+      const steer = clamp(d.steer, -1, 1);
+      // Pointed well away from the track: ease off the throttle so the turn
+      // actually happens instead of ploughing further into the scenery.
+      const throttle = Math.abs(steerTarget) > 0.75 ? 0.55 : 1;
+      k.aiControls = { throttle, brake: 0, steer, drift: false, driftPressed: false, item: false };
+      return;
+    }
 
     // ---- rubber band: nudges cornerSafety only, so straight-line pace is
     // never touched and the effect stays small and symmetric (see profiles.js)

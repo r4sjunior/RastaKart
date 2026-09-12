@@ -536,6 +536,7 @@ export class HudSystem {
       ev.on('item:pickup', (e) => {
         if (e && e.kart && !e.kart.isPlayer) return;
         this.#roll = { until: this.ctx.time.t + 0.85, id: this.#itemId(e?.item) };
+        this.#toast('item', 'ITEM!', 'gold', 900);
       }),
       ev.on('item:use', (e) => {
         if (e && e.kart && !e.kart.isPlayer) return;
